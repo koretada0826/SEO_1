@@ -66,31 +66,34 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
-// ── サーバー同期 ──
+// ── サーバー同期（マージ方式） ──
+// サーバー（DB or メモリ受け取り口）の案件を、ローカルへマージする。
+// 置き換えではなくマージなので、サーバーが空になってもローカルの案件は消えない。
+function mergeJobs(local: Job[], server: Job[]): Job[] {
+  const out = local.slice();
+  for (const s of server) {
+    const i = out.findIndex((j) => j.id === s.id || (!!s.url && j.url === s.url));
+    if (i >= 0) out[i] = s;
+    else out.unshift(s);
+  }
+  out.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  return out;
+}
+
 async function syncFromServer() {
   if (typeof window === "undefined") return;
   try {
     const res = await fetch("/api/jobs", { cache: "no-store" });
     if (!res.ok) return;
-    const json = (await res.json()) as { enabled: boolean; jobs: Job[] };
-    if (!json.enabled) {
-      serverEnabled = false;
-      return;
-    }
+    const json = (await res.json()) as { jobs: Job[] };
     serverEnabled = true;
     const serverJobs = Array.isArray(json.jobs) ? json.jobs : [];
-    if (serverJobs.length === 0 && db.jobs.length > 0) {
-      // DB初回：今ローカルにある案件をサーバーへ一度だけ移送
-      await fetch("/api/jobs", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(db.jobs),
-      });
-      return; // 次のポーリングで取得
+    if (!serverJobs.length) return; // 受信なし → ローカル維持
+    const merged = mergeJobs(db.jobs, serverJobs);
+    if (JSON.stringify(merged) !== JSON.stringify(db.jobs)) {
+      db.jobs = merged;
+      emit();
     }
-    // サーバーを正とする（jobsのみ置き換え）
-    db.jobs = serverJobs;
-    emit();
   } catch {
     /* オフライン等：ローカル表示のまま */
   }
