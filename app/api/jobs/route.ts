@@ -1,8 +1,34 @@
 import { NextResponse } from "next/server";
-import { listJobs, upsertJob, findIdByUrl, durable, clearAllJobs } from "@/lib/db";
+import { listJobs, upsertJob, findIdByUrl, getJobById, durable, clearAllJobs } from "@/lib/db";
 import { makeJob } from "@/lib/job";
 import { mapClaudeJsonToJob } from "@/lib/claudeChrome";
 import type { Job } from "@/lib/types";
+
+function toNum(v: unknown): number | undefined {
+  if (typeof v === "number") return v;
+  if (typeof v === "string" && v.trim()) {
+    const n = parseFloat(v.replace(/[^0-9.\-]/g, ""));
+    return isNaN(n) ? undefined : n;
+  }
+  return undefined;
+}
+
+// raw に明示的に含まれるフィールドだけを既存案件への差分として抽出
+function buildPatch(obj: Record<string, unknown>): Partial<Job> {
+  const p: Partial<Job> = {};
+  if (typeof obj.status === "string") p.status = obj.status as Job["status"];
+  if (typeof obj.title === "string" && obj.title) p.title = obj.title;
+  if (typeof obj.description === "string" && obj.description) p.description = obj.description;
+  if (typeof obj.deadline === "string" && obj.deadline) p.deadline = obj.deadline;
+  if (typeof obj.notes === "string" && obj.notes) p.notes = obj.notes;
+  const b = toNum(obj.budget);
+  if (b != null) p.budget = b;
+  const ar = toNum(obj.actualRevenue);
+  if (ar != null) p.actualRevenue = ar;
+  const er = toNum(obj.expectedRevenue);
+  if (er != null) p.expectedRevenue = er;
+  return p;
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,7 +61,17 @@ export async function POST(req: Request) {
         const partial = mapClaudeJsonToJob(obj); // Claude/部分JSONを正規化（scores付与）
         if (typeof obj.status === "string") partial.status = obj.status as Job["status"];
         const existingId = partial.url ? await findIdByUrl(partial.url) : null;
-        job = makeJob({ ...partial, id: existingId ?? undefined });
+        if (existingId) {
+          // 既存案件 → 上書きせず、送られたフィールドだけマージ更新
+          const existing = await getJobById(existingId);
+          if (existing) {
+            job = { ...existing, ...buildPatch(obj), id: existing.id, updatedAt: new Date().toISOString() };
+          } else {
+            job = makeJob({ ...partial, id: existingId });
+          }
+        } else {
+          job = makeJob(partial); // 新規
+        }
       }
       saved.push(await upsertJob(job));
     }

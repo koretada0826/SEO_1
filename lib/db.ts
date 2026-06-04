@@ -95,6 +95,14 @@ export async function deleteJob(id: string): Promise<boolean> {
   return true;
 }
 
+export async function getJobById(id: string): Promise<Job | null> {
+  const p = getPool();
+  if (!p) return mem.get(id) ?? null;
+  await ensureSchema(p);
+  const r = await p.query<{ data: Job }>(`select data from jobs where id = $1`, [id]);
+  return r.rows.length ? r.rows[0].data : null;
+}
+
 export async function clearAllJobs(): Promise<void> {
   const p = getPool();
   if (!p) {
