@@ -27,7 +27,8 @@ function emptyDB(): DB {
 
 let db: DB = emptyDB();
 let loaded = false;
-let serverEnabled = false; // /api/jobs がDB有効を返したら true
+let serverEnabled = false; // /api/jobs が応答したら true
+let seededUp = false; // 既存ローカル案件をサーバーへ一度だけ移送したか
 let polling = false;
 const listeners = new Set<() => void>();
 
@@ -88,7 +89,18 @@ async function syncFromServer() {
     const json = (await res.json()) as { jobs: Job[] };
     serverEnabled = true;
     const serverJobs = Array.isArray(json.jobs) ? json.jobs : [];
-    if (!serverJobs.length) return; // 受信なし → ローカル維持
+    if (!serverJobs.length) {
+      // サーバーが空：今ローカルにある案件を一度だけ移送（DB接続直後の初期投入）
+      if (!seededUp && db.jobs.length > 0) {
+        seededUp = true;
+        await fetch("/api/jobs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(db.jobs),
+        }).catch(() => {});
+      }
+      return;
+    }
     const merged = mergeJobs(db.jobs, serverJobs);
     if (JSON.stringify(merged) !== JSON.stringify(db.jobs)) {
       db.jobs = merged;
