@@ -44,10 +44,16 @@ export default function Home() {
     .filter((j) => [...WORKING, "delivered", "continuing"].includes(j.status))
     .reduce((s, j) => s + (j.analysis?.time?.toolSavedHours ?? 0), 0);
 
-  // 最近の動き
-  const recent = [...jobs]
+  // 応募した案件だけ（候補・見送り・地雷は除外）
+  const APPLIED_PLUS = [
+    "applied", "negotiating", "replied",
+    "won", "working", "draft_submitted", "revising",
+    "delivered", "continuing",
+  ];
+  const appliedList = [...jobs]
+    .filter((j) => APPLIED_PLUS.includes(j.status))
     .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""))
-    .slice(0, 12);
+    .slice(0, 100);
 
   if (total === 0) {
     return (
@@ -107,11 +113,17 @@ export default function Home() {
         </Card>
       </div>
 
-      {/* 最近の動き */}
+      {/* 応募した案件 */}
       <div className="mt-6">
-        <Card title="最近の動き" desc="Claudeが進めた案件（新しい順）。クリックで詳細を確認できます">
+        <Card
+          title={`応募した案件（${appliedList.length}件）`}
+          desc="実際に応募した案件だけを表示（候補・見送り・地雷は除く）。クリックで詳細を確認できます"
+        >
+          {appliedList.length === 0 ? (
+            <EmptyState title="応募した案件はまだありません" desc="Claude in Chrome が応募すると、ここに表示されます。" />
+          ) : (
           <div className="divide-y divide-border">
-            {recent.map((j) => (
+            {appliedList.map((j) => (
               <Link
                 key={j.id}
                 href={`/jobs/${j.id}`}
@@ -128,6 +140,7 @@ export default function Home() {
               </Link>
             ))}
           </div>
+          )}
         </Card>
       </div>
     </>
