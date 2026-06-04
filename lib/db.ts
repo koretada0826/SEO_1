@@ -95,6 +95,16 @@ export async function deleteJob(id: string): Promise<boolean> {
   return true;
 }
 
+export async function clearAllJobs(): Promise<void> {
+  const p = getPool();
+  if (!p) {
+    mem.clear();
+    return;
+  }
+  await ensureSchema(p);
+  await p.query(`delete from jobs`);
+}
+
 // URL（案件URL）で既存IDを探す＝重複登録の防止。
 export async function findIdByUrl(url: string): Promise<string | null> {
   if (!url) return null;

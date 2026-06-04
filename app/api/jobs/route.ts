@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listJobs, upsertJob, findIdByUrl, durable } from "@/lib/db";
+import { listJobs, upsertJob, findIdByUrl, durable, clearAllJobs } from "@/lib/db";
 import { makeJob } from "@/lib/job";
 import { mapClaudeJsonToJob } from "@/lib/claudeChrome";
 import type { Job } from "@/lib/types";
@@ -43,5 +43,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ enabled: true, durable: durable(), saved, count: saved.length });
   } catch (e) {
     return NextResponse.json({ enabled: true, saved: [], error: String(e) }, { status: 500 });
+  }
+}
+
+// DELETE /api/jobs → 全件削除（リセット用）
+export async function DELETE() {
+  try {
+    await clearAllJobs();
+    return NextResponse.json({ enabled: true, ok: true });
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 }

@@ -236,13 +236,23 @@ export const actions = {
   },
   resetAll() {
     db = { ...emptyDB(), jobs: SEED_JOBS(), settings: db.settings };
+    seededUp = true;
     emit();
-    if (serverEnabled) db.jobs.forEach((j) => pushJob(j));
+    if (serverEnabled && typeof window !== "undefined") {
+      // サーバーを一度空にしてからサンプルを投入（重複防止）
+      void fetch("/api/jobs", { method: "DELETE" })
+        .then(() => db.jobs.forEach((j) => pushJob(j)))
+        .catch(() => {});
+    }
   },
   clearAll() {
-    // ローカル表示のみクリア（サーバーDBは保持。全消ししたい場合は各案件を削除）
+    // ローカルもサーバーも空にする
     db = { ...emptyDB(), settings: db.settings };
+    seededUp = true;
     emit();
+    if (serverEnabled && typeof window !== "undefined") {
+      void fetch("/api/jobs", { method: "DELETE" }).catch(() => {});
+    }
   },
   // 手動でサーバーから取り込み直す（「同期」ボタン用）
   syncNow() {
