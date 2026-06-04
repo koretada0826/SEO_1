@@ -19,12 +19,10 @@ function fmtDate(iso?: string): string {
   return isNaN(d.getTime()) ? "" : `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-// 安すぎ／罠っぽい案件（＝本来は応募すべきでない）の判定
+// 「よっぽど安い」案件だけを金額で判定（SEO観点のラベルには依存しない）。
 function isLowValue(j: Job): boolean {
-  if ((j.scores?.risk ?? 0) >= 65) return true;
-  if (j.analysis?.label === "landmine" || j.analysis?.label === "pass") return true;
-  if (j.budgetType === "per_char" && j.budget > 0 && j.budget < 0.8) return true;
-  if (j.budgetType !== "per_char" && j.budget > 0 && j.budget < 3000) return true;
+  if (j.budgetType === "per_char" && j.budget > 0 && j.budget < 0.7) return true;
+  if (j.budgetType !== "per_char" && j.budget > 0 && j.budget < 2000) return true;
   return false;
 }
 
