@@ -1,25 +1,21 @@
 "use client";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useDB } from "@/lib/store";
-import { Card, StatCard, PageHeader, Badge, Button, Input, Select, EmptyState, cn } from "@/components/ui";
+import { useDB, actions } from "@/lib/store";
+import { Card, StatCard, PageHeader, Badge, Button, Input, EmptyState, cn } from "@/components/ui";
 import { STATUS_LABEL, statusColor, PLATFORM_LABEL, yen } from "@/lib/labels";
-import type { Job } from "@/lib/types";
+import type { Job, AppSettings } from "@/lib/types";
 
+const APPLIED = ["applied", "negotiating", "replied"];
 const WORKING = ["won", "working", "draft_submitted", "revising"];
-const APPLIED_PLUS = [
-  "applied", "negotiating", "replied",
-  "won", "working", "draft_submitted", "revising",
-  "delivered", "continuing",
-];
+const DONE = ["delivered", "continuing"];
+const ALL_LIVE = [...APPLIED, ...WORKING, ...DONE];
 
 function fmtDate(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   return isNaN(d.getTime()) ? "" : `${d.getMonth() + 1}/${d.getDate()}`;
 }
-
-// 「よっぽど安い」案件だけを金額で判定（SEO観点のラベルには依存しない）。
 function isLowValue(j: Job): boolean {
   if (j.budgetType === "per_char" && j.budget > 0 && j.budget < 0.7) return true;
   if (j.budgetType !== "per_char" && j.budget > 0 && j.budget < 2000) return true;
@@ -27,55 +23,54 @@ function isLowValue(j: Job): boolean {
 }
 
 const FILTERS: { key: string; label: string; match: (j: Job) => boolean }[] = [
-  { key: "applied", label: "応募した案件", match: (j) => APPLIED_PLUS.includes(j.status) },
-  { key: "all", label: "すべて", match: () => true },
-  { key: "reply", label: "返信あり", match: (j) => j.status === "replied" },
+  { key: "live", label: "応募した案件", match: (j) => ALL_LIVE.includes(j.status) },
+  { key: "reply", label: "要対応（返信）", match: (j) => ["replied", "negotiating"].includes(j.status) },
   { key: "won", label: "受注・作業中", match: (j) => WORKING.includes(j.status) },
-  { key: "delivered", label: "納品済み", match: (j) => ["delivered", "continuing"].includes(j.status) },
-  { key: "candidate", label: "応募候補", match: (j) => j.status === "to_apply" },
+  { key: "done", label: "納品済み", match: (j) => DONE.includes(j.status) },
 ];
 
 export default function Home() {
   const db = useDB();
   const jobs = db.jobs;
   const [q, setQ] = useState("");
-  const [filter, setFilter] = useState("applied");
-  const [sort, setSort] = useState("updated");
+  const [filter, setFilter] = useState("live");
 
-  const c = (f: (j: Job) => boolean) => jobs.filter(f).length;
-  const applied = c((j) => APPLIED_PLUS.includes(j.status));
-  const won = c((j) => WORKING.includes(j.status));
-  const delivered = c((j) => ["delivered", "continuing"].includes(j.status));
-  const expected = jobs
-    .filter((j) => !["passed", "landmine", "delivered", "continuing"].includes(j.status))
-    .reduce((s, j) => s + (j.expectedRevenue ?? 0), 0);
-
-  const deliveredJobs = jobs.filter((j) => ["delivered", "continuing"].includes(j.status));
-  const earned = deliveredJobs.reduce((s, j) => s + (j.actualRevenue || j.expectedRevenue || j.budget || 0), 0);
-  const earnedHours = deliveredJobs.reduce(
-    (s, j) => s + (j.analysis?.time?.withRevisionHours ?? j.analysis?.time?.normalHours ?? 0), 0);
-  const avgHourly = earnedHours > 0 ? Math.round(earned / earnedHours) : 0;
+  const sumExp = (st: string[]) =>
+    jobs.filter((j) => st.includes(j.status)).reduce((s, j) => s + (j.expectedRevenue ?? 0), 0);
+  const moneyApplied = sumExp(APPLIED);
+  const moneyWorking = sumExp(WORKING);
+  const moneyDone = jobs
+    .filter((j) => DONE.includes(j.status))
+    .reduce((s, j) => s + (j.actualRevenue || j.expectedRevenue || j.budget || 0), 0);
 
   const list = useMemo(() => {
     const f = FILTERS.find((x) => x.key === filter) ?? FILTERS[0];
     let r = jobs.filter(f.match);
     const kw = q.trim();
     if (kw) r = r.filter((j) => j.title.includes(kw));
-    r = r.slice().sort((a, b) => {
-      if (sort === "budget_desc") return (b.budget || 0) - (a.budget || 0);
-      if (sort === "budget_asc") return (a.budget || 0) - (b.budget || 0);
-      return (b.updatedAt || "").localeCompare(a.updatedAt || "");
-    });
-    return r;
-  }, [jobs, filter, q, sort]);
+    return r.slice().sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+  }, [jobs, filter, q]);
+
+  const notifEnabled = db.settings.notificationsEnabled;
+  const enableNotif = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission === "granted") {
+      actions.updateSettings({ notificationsEnabled: true } as Partial<AppSettings>);
+      return;
+    }
+    const res = await Notification.requestPermission();
+    if (res === "granted") {
+      actions.updateSettings({ notificationsEnabled: true } as Partial<AppSettings>);
+      new Notification("通知をオンにしました", { body: "返信・受注などで知らせます" });
+    }
+  };
 
   if (jobs.length === 0) {
     return (
       <>
-        <PageHeader title="SEO Scout" desc="Claudeが案件を取り込むと、ここに表示されます。" />
+        <PageHeader title="案件" desc="Claude in Chrome で応募すると、自動でここに表示されます。" />
         <EmptyState
           title="まだ案件がありません"
-          desc="Claude in Chrome で案件を探して応募すると、自動でここに反映されます。"
           action={<Link href="/claude"><Button>案件を探す / 取り込む</Button></Link>}
         />
       </>
@@ -85,29 +80,36 @@ export default function Home() {
   return (
     <>
       <PageHeader
-        title="案件ダッシュボード"
-        desc="Claudeが進めた案件の状況と一覧。基本は眺めるだけでOK。案件名をクリックで詳細（解析・提案・納品）。"
-        right={<Link href="/claude"><Button>案件を探す / 取り込む</Button></Link>}
+        title="案件"
+        desc="応募した案件と進捗・お金の状況。クリックで詳細。"
+        right={
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => actions.syncNow()}>↻ 更新</Button>
+            <Link href="/claude"><Button>案件を探す / 取り込む</Button></Link>
+          </div>
+        }
       />
 
-      {/* 成果サマリ */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <StatCard label="応募した案件" value={applied} tone="accent" />
-        <StatCard label="受注・作業中" value={won} tone="good" />
-        <StatCard label="納品済み" value={delivered} tone="good" />
-        <StatCard label="今月見込み" value={yen(expected)} tone="good" />
-        <StatCard
-          label="平均時給（換算）"
-          value={avgHourly ? `¥${avgHourly.toLocaleString("ja-JP")}/h` : "—"}
-          sub={avgHourly ? undefined : "納品が出ると表示"}
-          tone={avgHourly >= 2500 ? "good" : avgHourly > 0 ? "warn" : "accent"}
-        />
+      {/* 通知オン（要対応時に知らせる） */}
+      {!notifEnabled && (
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3">
+          <p className="text-xs text-zinc-300">
+            🔔 返信・条件交渉・受注など<strong className="text-zinc-100">あなたの対応が必要なとき</strong>に通知します。
+          </p>
+          <Button onClick={enableNotif} className="shrink-0 px-3 py-1.5 text-xs">通知をオンにする</Button>
+        </div>
+      )}
+
+      {/* お金の管理 */}
+      <div className="grid grid-cols-3 gap-3">
+        <StatCard label="見込み（応募中）" value={yen(moneyApplied)} sub="返信待ち・交渉中" tone="accent" />
+        <StatCard label="進行中（受注）" value={yen(moneyWorking)} sub="受注〜作業中" tone="warn" />
+        <StatCard label="確定売上（納品）" value={yen(moneyDone)} sub="納品済み" tone="good" />
       </div>
 
-      {/* フィルタ＋一覧 */}
-      <div className="mt-6">
+      {/* 一覧 */}
+      <div className="mt-5">
         <Card className="p-0">
-          {/* フィルタバー */}
           <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
             <div className="flex flex-wrap gap-1.5">
               {FILTERS.map((f) => (
@@ -125,35 +127,20 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <div className="ml-auto flex items-center gap-2">
-              <Input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="案件名で検索"
-                className="h-8 w-40 py-1 text-xs"
-              />
-              <Select value={sort} onChange={(e) => setSort(e.target.value)} className="h-8 w-28 py-1 text-xs">
-                <option value="updated">更新が新しい順</option>
-                <option value="budget_desc">予算が高い順</option>
-                <option value="budget_asc">予算が低い順</option>
-              </Select>
-            </div>
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="案件名で検索"
+              className="ml-auto h-8 w-44 py-1 text-xs"
+            />
           </div>
 
-          {/* 一覧 */}
           {list.length === 0 ? (
-            <EmptyState title="該当する案件はありません" desc="フィルタや検索条件を変えてみてください。" />
+            <EmptyState title="該当する案件はありません" />
           ) : (
             <div className="divide-y divide-border">
-              <div className="flex items-center gap-3 px-4 py-2 text-[10px] uppercase tracking-wider text-zinc-600">
-                <span className="w-20 shrink-0">状態</span>
-                <span className="flex-1">案件名</span>
-                <span className="hidden w-24 shrink-0 sm:block">媒体</span>
-                <span className="w-20 shrink-0 text-right">予算</span>
-                <span className="w-10 shrink-0 text-right">更新</span>
-              </div>
               {list.map((j) => {
-                const low = isLowValue(j) && APPLIED_PLUS.includes(j.status);
+                const low = isLowValue(j);
                 return (
                   <Link
                     key={j.id}
@@ -166,14 +153,12 @@ export default function Home() {
                     <span className="flex min-w-0 flex-1 items-center gap-2">
                       <span className="truncate text-[13px] text-zinc-100">{j.title}</span>
                       {low && (
-                        <Badge className="shrink-0 border-warn/40 bg-warn/10 text-warn" title="安い/見送り基準。辞退を検討">
-                          ⚠ 安い
-                        </Badge>
+                        <Badge className="shrink-0 border-warn/40 bg-warn/10 text-warn" title="単価が低い案件">⚠ 安い</Badge>
                       )}
                     </span>
                     <span className="hidden w-24 shrink-0 text-[11px] text-muted sm:block">{PLATFORM_LABEL[j.platform]}</span>
                     <span className="w-20 shrink-0 text-right text-[12px] tabular-nums text-zinc-300">{yen(j.budget)}</span>
-                    <span className="w-10 shrink-0 text-right text-[10px] text-muted">{fmtDate(j.updatedAt)}</span>
+                    <span className="w-9 shrink-0 text-right text-[10px] text-muted">{fmtDate(j.updatedAt)}</span>
                   </Link>
                 );
               })}

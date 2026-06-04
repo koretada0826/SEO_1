@@ -150,10 +150,11 @@ export function useDB(): DB {
 const nowIso = () => new Date().toISOString();
 
 // ── 通知（ステータス変化時のブラウザ通知） ──
+// あなたの対応が必要になった時だけ通知する
 const NOTIFY_STATUS: Partial<Record<JobStatus, string>> = {
-  applied: "✅ 応募しました",
-  won: "🎉 受注しました",
-  delivered: "📦 作業完了（納品済み）",
+  replied: "💬 返信が来ました（確認してください）",
+  negotiating: "💬 条件交渉中（確認してください）",
+  won: "🎉 受注しました（契約・報酬手続きを確認）",
 };
 function notifyStatusChange(title: string, status: JobStatus) {
   if (!db.settings.notificationsEnabled) return;
