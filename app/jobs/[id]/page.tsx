@@ -135,7 +135,7 @@ export default function JobDetailPage() {
         title="案件が見つかりません"
         desc="削除されたか、URLが正しくない可能性があります。"
         action={
-          <Link href="/jobs">
+          <Link href="/">
             <Button>案件一覧へ戻る</Button>
           </Link>
         }
@@ -146,7 +146,7 @@ export default function JobDetailPage() {
   return (
     <>
       <div className="mb-3">
-        <Link href="/jobs" className="text-xs text-accent hover:underline">
+        <Link href="/" className="text-xs text-accent hover:underline">
           ← 案件一覧
         </Link>
       </div>
