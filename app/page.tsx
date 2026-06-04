@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import Link from "next/link";
 import { useDB, actions } from "@/lib/store";
 import { Card, StatCard, PageHeader, Badge, Button, EmptyState } from "@/components/ui";
@@ -224,36 +225,76 @@ export default function Home() {
   );
 }
 
+// なぜClaudeだけで進められないか（判断を人間に委ねる理由）を案件データから説明する
+function reasonFor(job: Job, kind: string): string {
+  if (kind.startsWith("納期"))
+    return "納品物を期限までに最終確認して提出する必要があります。提出の可否は品質責任を伴うため、Claudeではなくあなたの承認が必要です。";
+  if (kind === "提出待ち")
+    return "納品物の準備ができています。最終チェックして提出するのは品質責任が伴うため、あなたの確認が必要です。";
+  if (kind === "受注")
+    return "受注後の契約承認・報酬の受け取り（本人確認・口座登録・インボイス）は、あなた本人にしかできない手続きです。Claudeはここを代行できません。";
+  if (kind === "返信あり")
+    return "クライアントからの返信です。条件交渉や受注の可否はお金・契約が絡む判断のため、Claudeに任せず、あなたが決めます。";
+  // 要判断（Claudeが応募を保留）
+  const a = job.analysis;
+  const reasons: string[] = [];
+  if (a?.label === "landmine") reasons.push("ツール判定が『地雷注意』で、トラブルの可能性が高い");
+  else if (a?.label === "pass") reasons.push("ツール判定が『見送り推奨』で、応募価値が低い可能性がある");
+  if ((job.budget ?? 0) === 0) reasons.push("予算が不明で、割に合うか機械的に判断できない");
+  else if (job.budgetType === "per_char" && (job.budget ?? 0) > 0 && (job.budget ?? 0) < 1)
+    reasons.push(`文字単価が低い（¥${job.budget}）`);
+  if (job.aiPolicy === "forbidden") reasons.push("AI使用不可で、納品方針を手作業へ切り替える必要がある");
+  if (a?.riskHits?.length) reasons.push(`注意ワード「${a.riskHits.map((r) => r.word).join("・")}」を検出`);
+  const base =
+    "Claudeは規約に配慮し、確信が持てない案件は勝手に応募せず、あなたの判断を待ちます。";
+  return reasons.length ? `${base}（理由：${reasons.join(" / ")}）` : base;
+}
+
 function NeedRow({ n }: { n: Need }) {
   const { job } = n;
+  const [open, setOpen] = useState(false);
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg/40 px-3 py-3 transition hover:border-accent/40">
-      <Badge className={n.kindCls}>{n.kind}</Badge>
-      <div className="min-w-0 flex-1">
-        <Link href={`/jobs/${job.id}`} className="block">
-          <p className="truncate text-[13px] font-medium text-zinc-100 hover:text-accent">{job.title}</p>
-        </Link>
-        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
-          <Badge className="border-border bg-white/5 text-muted">{PLATFORM_LABEL[job.platform]}</Badge>
-          <span>{yen(job.budget)}</span>
-          <span className="text-accent2">{n.note}</span>
+    <div className="rounded-lg border border-border bg-bg/40 px-3 py-3 transition hover:border-accent/40">
+      <div className="flex flex-wrap items-center gap-3">
+        <Badge className={n.kindCls}>{n.kind}</Badge>
+        <div className="min-w-0 flex-1">
+          <Link href={`/jobs/${job.id}`} className="block">
+            <p className="truncate text-[13px] font-medium text-zinc-100 hover:text-accent">{job.title}</p>
+          </Link>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+            <Badge className="border-border bg-white/5 text-muted">{PLATFORM_LABEL[job.platform]}</Badge>
+            <span>{yen(job.budget)}</span>
+            <span className="text-accent2">{n.note}</span>
+            <button
+              onClick={() => setOpen((v) => !v)}
+              className="text-muted underline decoration-dotted underline-offset-2 transition hover:text-zinc-300"
+            >
+              {open ? "理由を隠す" : "なぜ自分で対応？"}
+            </button>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {n.actions.map((a) => (
+            <Button
+              key={a.label}
+              variant={a.variant ?? "outline"}
+              className="px-3 py-1.5 text-xs"
+              onClick={() => actions.setStatus(job.id, a.status)}
+            >
+              {a.label}
+            </Button>
+          ))}
+          <Link href={`/jobs/${job.id}`}>
+            <Button variant="ghost" className="px-3 py-1.5 text-xs">開いて確認</Button>
+          </Link>
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {n.actions.map((a) => (
-          <Button
-            key={a.label}
-            variant={a.variant ?? "outline"}
-            className="px-3 py-1.5 text-xs"
-            onClick={() => actions.setStatus(job.id, a.status)}
-          >
-            {a.label}
-          </Button>
-        ))}
-        <Link href={`/jobs/${job.id}`}>
-          <Button variant="ghost" className="px-3 py-1.5 text-xs">開いて確認</Button>
-        </Link>
-      </div>
+      {open && (
+        <p className="mt-2 rounded-md border border-border bg-white/[0.02] px-3 py-2 text-[11px] leading-relaxed text-zinc-400">
+          <span className="font-medium text-zinc-300">Claudeだけで進められない理由：</span>
+          {reasonFor(job, n.kind)}
+        </p>
+      )}
     </div>
   );
 }
