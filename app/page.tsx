@@ -1,8 +1,8 @@
 "use client";
 import Link from "next/link";
 import { useDB, actions } from "@/lib/store";
-import { Card, PageHeader, Badge, Button, EmptyState } from "@/components/ui";
-import { STATUS_LABEL, PLATFORM_LABEL, yen, LABEL_TEXT, labelColor } from "@/lib/labels";
+import { Card, StatCard, PageHeader, Badge, Button, EmptyState } from "@/components/ui";
+import { STATUS_LABEL, PLATFORM_LABEL, yen, statusColor, LABEL_TEXT, labelColor } from "@/lib/labels";
 import type { Job, JobStatus } from "@/lib/types";
 
 function parseDeadline(s?: string): Date | null {
@@ -14,20 +14,25 @@ function parseDeadline(s?: string): Date | null {
 }
 function daysUntil(d: Date | null): number | null {
   if (!d) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return Math.round((d.getTime() - today.getTime()) / 86400000);
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return Math.round((d.getTime() - t.getTime()) / 86400000);
+}
+function fmtDate(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-type Act = { label: string; status: JobStatus; variant?: "primary" | "outline" | "subtle" | "danger" };
-interface Approval {
+type Act = { label: string; status: JobStatus; variant?: "primary" | "outline" };
+interface Need {
   job: Job;
   rank: number;
   kind: string;
   kindCls: string;
-  note: string; // Claudeのおすすめ・状況
+  note: string;
   actions: Act[];
-  href: string; // 開いて確認するリンク
 }
 
 const WORKING = ["won", "working", "draft_submitted", "revising"];
@@ -36,182 +41,217 @@ export default function Home() {
   const db = useDB();
   const jobs = db.jobs;
 
-  const approvals: Approval[] = [];
-  for (const j of jobs) {
-    if (["passed", "landmine", "delivered", "continuing"].includes(j.status)) continue;
-    const hasProp = j.proposals.length > 0;
-    const hasDeliv = j.deliverables.length > 0;
-    const dl = daysUntil(parseDeadline(j.deadline));
-    const detail = `/jobs/${j.id}`;
+  const c = (f: (j: Job) => boolean) => jobs.filter(f).length;
+  const total = jobs.length;
+  const candidates = c((j) => j.status === "to_apply");
+  const appliedInFlight = c((j) => ["applied", "negotiating", "replied"].includes(j.status));
+  const won = c((j) => WORKING.includes(j.status));
+  const delivered = c((j) => ["delivered", "continuing"].includes(j.status));
+  const expected = jobs
+    .filter((j) => !["passed", "landmine", "delivered", "continuing"].includes(j.status))
+    .reduce((s, j) => s + (j.expectedRevenue ?? 0), 0);
+  const actual = jobs.reduce((s, j) => s + (j.actualRevenue ?? 0), 0);
 
-    // 返信あり：受注 or 見送りを判断
+  // ── 稼ぎ・時給換算（納品済みベース） ──
+  const deliveredJobs = jobs.filter((j) => ["delivered", "continuing"].includes(j.status));
+  const earned = deliveredJobs.reduce(
+    (s, j) => s + (j.actualRevenue || j.expectedRevenue || j.budget || 0),
+    0
+  );
+  const earnedHours = deliveredJobs.reduce(
+    (s, j) => s + (j.analysis?.time?.withRevisionHours ?? j.analysis?.time?.normalHours ?? 0),
+    0
+  );
+  const avgHourly = earnedHours > 0 ? Math.round(earned / earnedHours) : 0;
+  const savedHours = jobs
+    .filter((j) => [...WORKING, "delivered", "continuing"].includes(j.status))
+    .reduce((s, j) => s + (j.analysis?.time?.toolSavedHours ?? 0), 0);
+
+  // ── あなたの対応が必要（普段は空） ──
+  const needs: Need[] = [];
+  for (const j of jobs) {
+    if (["passed", "landmine", "delivered", "continuing", "applied", "negotiating"].includes(j.status)) continue;
+    const dl = daysUntil(parseDeadline(j.deadline));
     if (j.status === "replied") {
-      approvals.push({
-        job: j,
-        rank: 0,
-        kind: "返信あり",
-        kindCls: "border-accent2/40 bg-accent2/10 text-accent2",
-        note: "クライアントから返信。条件を確認して受注/見送りを判断",
-        actions: [
-          { label: "受注にする", status: "won", variant: "primary" },
-          { label: "見送り", status: "passed", variant: "outline" },
-        ],
-        href: detail,
+      needs.push({
+        job: j, rank: 0, kind: "返信あり", kindCls: "border-accent2/40 bg-accent2/10 text-accent2",
+        note: "条件を確認して判断（受注 / 見送り）",
+        actions: [{ label: "受注にする", status: "won", variant: "primary" }, { label: "見送り", status: "passed" }],
       });
       continue;
     }
-    // 作業中で納期が近い
-    if (WORKING.includes(j.status) && dl != null && dl <= 7) {
-      approvals.push({
-        job: j,
-        rank: 1 + Math.max(0, dl),
-        kind: dl < 0 ? "納期超過" : "納期間近",
+    if (WORKING.includes(j.status) && dl != null && dl <= 3) {
+      needs.push({
+        job: j, rank: 1 + Math.max(0, dl), kind: dl < 0 ? "納期超過" : "納期間近",
         kindCls: "border-danger/40 bg-danger/10 text-danger",
-        note: dl < 0 ? `納期を${-dl}日超過` : dl === 0 ? "本日納期" : `納期まであと${dl}日`,
-        actions: hasDeliv ? [{ label: "納品済みにする", status: "delivered", variant: "primary" }] : [],
-        href: detail,
+        note: dl < 0 ? `納期${-dl}日超過` : dl === 0 ? "本日納期" : `あと${dl}日`,
+        actions: j.deliverables.length ? [{ label: "納品済みにする", status: "delivered", variant: "primary" }] : [],
       });
       continue;
     }
-    // 納品物ができた → 提出の確認
-    if (WORKING.includes(j.status) && hasDeliv) {
-      approvals.push({
-        job: j,
-        rank: 12,
-        kind: "提出待ち",
-        kindCls: "border-good/40 bg-good/10 text-good",
-        note: "納品物が用意できています。内容を確認して提出",
-        actions: [{ label: "納品済みにする", status: "delivered", variant: "primary" }],
-        href: detail,
-      });
-      continue;
-    }
-    // 作業中だが納品物がまだ
-    if (WORKING.includes(j.status) && !hasDeliv) {
-      approvals.push({
-        job: j,
-        rank: 14,
-        kind: "納品作成",
-        kindCls: "border-warn/40 bg-warn/10 text-warn",
-        note: "受注済み。納品物の作成が必要です",
+    if (j.status === "won") {
+      needs.push({
+        job: j, rank: 8, kind: "受注", kindCls: "border-good/40 bg-good/10 text-good",
+        note: "契約・報酬手続き／納品物の作成へ",
         actions: [],
-        href: detail,
       });
       continue;
     }
-    // 応募予定：提案文を確認して応募
+    if (WORKING.includes(j.status) && j.deliverables.length) {
+      needs.push({
+        job: j, rank: 9, kind: "提出待ち", kindCls: "border-good/40 bg-good/10 text-good",
+        note: "納品物を確認して提出",
+        actions: [{ label: "納品済みにする", status: "delivered", variant: "primary" }],
+      });
+      continue;
+    }
     if (j.status === "to_apply") {
-      approvals.push({
-        job: j,
-        rank: 20,
-        kind: "応募の確認",
-        kindCls: "border-accent/40 bg-accent/10 text-accent",
-        note: hasProp ? "提案文あり。内容を確認して応募" : "応募候補。提案文を作成して応募",
-        actions: [{ label: "応募した", status: "applied", variant: "primary" }],
-        href: detail,
-      });
-      continue;
-    }
-    // 保存：応募するか判断（Claudeのおすすめを確認）
-    if (j.status === "saved") {
-      const rec = j.analysis ? `Claudeの判定：${LABEL_TEXT[j.analysis.label]}` : "未解析";
-      approvals.push({
-        job: j,
-        rank: 24,
-        kind: "応募判断",
-        kindCls: "border-accent/40 bg-accent/10 text-accent",
-        note: rec,
-        actions: [
-          { label: "応募候補に入れる", status: "to_apply", variant: "primary" },
-          { label: "見送り", status: "passed", variant: "outline" },
-        ],
-        href: detail,
+      needs.push({
+        job: j, rank: 12, kind: "要判断", kindCls: "border-accent/40 bg-accent/10 text-accent",
+        note: "Claudeが応募を保留。応募するか判断",
+        actions: [{ label: "応募した", status: "applied", variant: "primary" }, { label: "見送り", status: "passed" }],
       });
     }
   }
-  approvals.sort((a, b) => a.rank - b.rank);
+  needs.sort((a, b) => a.rank - b.rank);
 
-  const waiting = jobs.filter((j) => ["applied", "negotiating"].includes(j.status)).length;
+  // ── 最近の動き ──
+  const recent = [...jobs]
+    .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""))
+    .slice(0, 8);
+
+  if (total === 0) {
+    return (
+      <>
+        <PageHeader title="ダッシュボード" desc="Claudeが案件を取り込むと、ここに状況が表示されます。" />
+        <EmptyState
+          title="まだ案件がありません"
+          desc="Claude in Chrome で案件を探して応募・登録すると、ここに反映されます。"
+          action={<Link href="/claude"><Button>案件を探す / 取り込む</Button></Link>}
+        />
+      </>
+    );
+  }
 
   return (
     <>
       <PageHeader
-        title="承認センター"
-        desc="Claudeが進めた案件のうち、あなたの確認・承認が必要なものだけ表示します。ボタンで承認、開いて中身も確認できます。"
+        title="ダッシュボード"
+        desc="Claudeが進めた案件の状況です。普段は眺めるだけ。あなたの対応が必要なものだけ下に出ます。"
         right={
           <div className="flex gap-2">
-            <Link href="/claude">
-              <Button variant="outline">案件を探す/取り込む</Button>
-            </Link>
-            <Link href="/jobs">
-              <Button variant="outline">案件一覧</Button>
-            </Link>
+            <Link href="/claude"><Button variant="outline">案件を探す/取り込む</Button></Link>
+            <Link href="/jobs"><Button variant="outline">案件一覧</Button></Link>
           </div>
         }
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-muted">
-        <Badge className="border-accent/40 bg-accent/10 text-accent">承認待ち {approvals.length}</Badge>
-        {waiting > 0 && <Badge className="border-border bg-white/5 text-muted">返信待ち {waiting}</Badge>}
+      {/* Claudeの成果 */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <StatCard label="総案件" value={total} tone="accent" />
+        <StatCard label="応募候補" value={candidates} tone="accent" />
+        <StatCard label="応募済み（返信待ち）" value={appliedInFlight} tone="accent" />
+        <StatCard label="受注・作業中" value={won} tone="good" />
+        <StatCard label="納品済み" value={delivered} tone="good" />
+        <StatCard label="今月見込み" value={yen(expected)} sub={actual ? `実売上 ${yen(actual)}` : undefined} tone="good" />
       </div>
 
-      <Card title="承認待ち" desc={approvals.length ? "優先度が高い順" : undefined}>
-        {approvals.length ? (
-          <div className="space-y-2">
-            {approvals.map((a) => (
-              <ApprovalRow key={a.job.id} a={a} />
+      {/* 稼ぎ・時給換算 */}
+      <div className="mt-6">
+        <Card title="稼ぎ・時給換算" desc="納品済み案件の実績ベース（実売上が未入力なら予算で概算）">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatCard label="納品済み売上" value={yen(earned)} sub={actual ? `うち確定 ${yen(actual)}` : undefined} tone="good" />
+            <StatCard label="納品済み件数" value={delivered} tone="good" />
+            <StatCard
+              label="平均時給（換算）"
+              value={avgHourly ? `¥${avgHourly.toLocaleString("ja-JP")}/h` : "—"}
+              sub={avgHourly ? "見積工数ベース" : "納品が出ると表示"}
+              tone={avgHourly >= 2500 ? "good" : avgHourly > 0 ? "warn" : "accent"}
+            />
+            <StatCard
+              label="ツール削減時間（見込）"
+              value={`${savedHours.toFixed(1)}h`}
+              sub="自作ツールでの短縮"
+              tone="accent"
+            />
+          </div>
+        </Card>
+      </div>
+
+      {/* あなたの対応が必要 */}
+      <div className="mt-6">
+        <Card
+          title="あなたの対応が必要"
+          desc={needs.length ? "Claudeだけでは進められない（あなたの判断・手続きが要る）案件" : undefined}
+        >
+          {needs.length ? (
+            <div className="space-y-2">
+              {needs.map((n) => <NeedRow key={n.job.id} n={n} />)}
+            </div>
+          ) : (
+            <EmptyState
+              title="対応が必要なことはありません 🎉"
+              desc="Claudeに任せてOK。返信・受注・納期などであなたの判断が要るときだけ、ここに出ます。"
+            />
+          )}
+        </Card>
+      </div>
+
+      {/* 最近の動き */}
+      <div className="mt-6">
+        <Card title="最近の動き" desc="Claudeや自分が更新した案件（新しい順）">
+          <div className="divide-y divide-border">
+            {recent.map((j) => (
+              <Link
+                key={j.id}
+                href={`/jobs/${j.id}`}
+                className="flex items-center gap-3 px-1 py-2.5 transition hover:bg-white/[0.03]"
+              >
+                <Badge className={statusColor(j.status)}>{STATUS_LABEL[j.status]}</Badge>
+                <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-200">{j.title}</span>
+                {j.analysis && (
+                  <Badge className={labelColor(j.analysis.label)}>{LABEL_TEXT[j.analysis.label]}</Badge>
+                )}
+                <span className="hidden shrink-0 text-[11px] text-muted sm:inline">{PLATFORM_LABEL[j.platform]}</span>
+                <span className="w-16 shrink-0 text-right text-[12px] tabular-nums text-zinc-300">{yen(j.budget)}</span>
+                <span className="w-10 shrink-0 text-right text-[10px] text-muted">{fmtDate(j.updatedAt)}</span>
+              </Link>
             ))}
           </div>
-        ) : (
-          <EmptyState
-            title="承認待ちはありません 🎉"
-            desc="新しい案件を探すか、案件一覧から状況を確認できます。"
-            action={
-              <Link href="/claude">
-                <Button variant="outline">案件を探す/取り込む</Button>
-              </Link>
-            }
-          />
-        )}
-      </Card>
+        </Card>
+      </div>
     </>
   );
 }
 
-function ApprovalRow({ a }: { a: Approval }) {
-  const { job } = a;
+function NeedRow({ n }: { n: Need }) {
+  const { job } = n;
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg/40 px-3 py-3 transition hover:border-accent/40">
-      <Badge className={a.kindCls}>{a.kind}</Badge>
+      <Badge className={n.kindCls}>{n.kind}</Badge>
       <div className="min-w-0 flex-1">
-        <Link href={a.href} className="block">
+        <Link href={`/jobs/${job.id}`} className="block">
           <p className="truncate text-[13px] font-medium text-zinc-100 hover:text-accent">{job.title}</p>
         </Link>
         <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
           <Badge className="border-border bg-white/5 text-muted">{PLATFORM_LABEL[job.platform]}</Badge>
           <span>{yen(job.budget)}</span>
-          <Badge className="border-border bg-white/5 text-muted">{STATUS_LABEL[job.status]}</Badge>
-          {job.analysis && (
-            <Badge className={labelColor(job.analysis.label)}>{LABEL_TEXT[job.analysis.label]}</Badge>
-          )}
-          <span className="text-accent2">{a.note}</span>
+          <span className="text-accent2">{n.note}</span>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        {a.actions.map((act) => (
+        {n.actions.map((a) => (
           <Button
-            key={act.label}
-            variant={act.variant ?? "outline"}
+            key={a.label}
+            variant={a.variant ?? "outline"}
             className="px-3 py-1.5 text-xs"
-            onClick={() => actions.setStatus(job.id, act.status)}
+            onClick={() => actions.setStatus(job.id, a.status)}
           >
-            {act.label}
+            {a.label}
           </Button>
         ))}
-        <Link href={a.href}>
-          <Button variant="ghost" className="px-3 py-1.5 text-xs">
-            開いて確認
-          </Button>
+        <Link href={`/jobs/${job.id}`}>
+          <Button variant="ghost" className="px-3 py-1.5 text-xs">開いて確認</Button>
         </Link>
       </div>
     </div>

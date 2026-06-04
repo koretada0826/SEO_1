@@ -34,7 +34,7 @@ const ICONS: Record<string, React.ReactNode> = {
 };
 
 const NAV: { href: string; label: string; icon: keyof typeof ICONS; hint?: string }[] = [
-  { href: "/", label: "ホーム", icon: "home", hint: "承認センター" },
+  { href: "/", label: "ホーム", icon: "home", hint: "ダッシュボード" },
   { href: "/jobs", label: "案件", icon: "jobs", hint: "探す・解析・提案・納品" },
   { href: "/settings", label: "設定", icon: "settings" },
 ];
